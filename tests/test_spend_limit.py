@@ -51,6 +51,30 @@ class PeriodBounds(unittest.TestCase):
         )
 
 
+class Pacing(unittest.TestCase):
+    october = dt.datetime(2026, 10, 14, 17, 30, tzinfo=UTC)  # 22 weekdays
+    columbus = {dt.date(2026, 10, 12)}
+
+    def test_weekdays_only(self):
+        self.assertEqual(sl.business_days(self.october, set()), 22)
+
+    def test_holiday_on_a_weekday_is_not_a_business_day(self):
+        self.assertEqual(sl.business_days(self.october, self.columbus), 21)
+
+    def test_holiday_on_a_weekend_changes_nothing(self):
+        self.assertEqual(sl.business_days(self.october, {dt.date(2026, 10, 10)}), 22)
+
+    def test_holidays_in_other_months_are_ignored(self):
+        self.assertEqual(sl.business_days(self.october, {dt.date(2026, 11, 26)}), 22)
+
+    def test_december_rolls_over_the_year(self):
+        december = dt.datetime(2026, 12, 31, 23, 59, tzinfo=UTC)
+        self.assertEqual(sl.business_days(december, {dt.date(2026, 12, 25)}), 22)
+
+    def test_paced_limit_spreads_the_budget(self):
+        self.assertAlmostEqual(sl.paced_limit(250, self.october, self.columbus), 250 / 21)
+
+
 class PrincipalOf(unittest.TestCase):
     def test_identity_center_user_is_human_keyed_by_session(self):
         p = sl.principal_of(

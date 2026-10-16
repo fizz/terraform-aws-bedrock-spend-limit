@@ -50,6 +50,16 @@ Workloads are keyed by role because their session names change with every pod an
 
 `limits` sets a limit for a named principal, and `exempt_patterns` leaves callers out entirely.
 
+**A monthly budget, paced by the day.** With `period = "day"`, `monthly_budget_usd` replaces `human_limit_usd` with the budget divided by the business days in the current month, recomputed each run. Nobody can spend the month in a week, and a month of working days spends the budget. Weekends and holidays get the same daily limit; they are only left out of the count. `holidays` takes the dates that are not business days, and `scripts/holidays.py` writes a country's public holidays as JSON:
+
+```hcl
+  period             = "day"
+  monthly_budget_usd = 250 # $11.90 a day in October 2026: 22 weekdays, less Columbus Day
+  holidays           = [for h in jsondecode(file("${path.module}/holidays.json")) : h.date]
+```
+
+`limits` and overrides stay daily amounts. A period of `month` with a plain limit is the other choice: one monthly total, which a person can spend in a day.
+
 **Raising a limit in an emergency** needs no apply. Write the overrides parameter, and the next run reads it:
 
 ```sh

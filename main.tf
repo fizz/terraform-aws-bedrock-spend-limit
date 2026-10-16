@@ -17,7 +17,9 @@ locals {
   partition  = data.aws_partition.current.partition
   region     = data.aws_region.current.id
 
-  workload_limit_usd = coalesce(var.workload_limit_usd, 2 * var.human_limit_usd)
+  # With pacing, the human limit changes month to month, so the script doubles it.
+  paced              = var.monthly_budget_usd != null
+  workload_limit_usd = var.workload_limit_usd != null ? tostring(var.workload_limit_usd) : local.paced ? "" : tostring(2 * var.human_limit_usd)
 
   log_group_arns = [
     for r in var.regions : "arn:${local.partition}:logs:${r}:${local.account_id}:log-group:${var.log_group_name}"
@@ -205,7 +207,9 @@ resource "aws_ssm_document" "spend_limit" {
           Period             = var.period
           BlockMinutes       = tostring(var.block_minutes)
           HumanLimitUsd      = tostring(var.human_limit_usd)
-          WorkloadLimitUsd   = tostring(local.workload_limit_usd)
+          MonthlyBudgetUsd   = local.paced ? tostring(var.monthly_budget_usd) : ""
+          HolidaysJson       = jsonencode(var.holidays)
+          WorkloadLimitUsd   = local.workload_limit_usd
           LimitsJson         = jsonencode(var.limits)
           WarnAtJson         = jsonencode(var.warn_at)
           PricesJson         = jsonencode(var.prices)
@@ -222,6 +226,13 @@ resource "aws_ssm_document" "spend_limit" {
       }
     }]
   })
+
+  lifecycle {
+    precondition {
+      condition     = !local.paced || var.period == "day"
+      error_message = "monthly_budget_usd paces spend as a daily limit, so it needs period = \"day\"."
+    }
+  }
 }
 
 # -----------------------------------------------------------------------------

@@ -41,8 +41,30 @@ variable "human_limit_usd" {
   default     = 50
 }
 
+variable "monthly_budget_usd" {
+  description = "Spend per human per calendar month, in USD, paced as a daily limit: the budget divided by the business days in the current month. Needs period = day, and replaces human_limit_usd. Null turns pacing off."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.monthly_budget_usd == null || try(var.monthly_budget_usd > 0, false)
+    error_message = "monthly_budget_usd must be greater than 0."
+  }
+}
+
+variable "holidays" {
+  description = "Dates (YYYY-MM-DD) that are not business days, for monthly_budget_usd. scripts/holidays.py writes a country's public holidays as JSON."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for d in var.holidays : can(regex("^\\d{4}-\\d{2}-\\d{2}$", d))])
+    error_message = "Each holiday must be a date in YYYY-MM-DD form."
+  }
+}
+
 variable "workload_limit_usd" {
-  description = "Default spend per workload role or IAM user per period, in USD. Null means twice the human limit."
+  description = "Default spend per workload role or IAM user per period, in USD. Null means twice the human limit, the paced daily limit included."
   type        = number
   default     = null
 }

@@ -77,6 +77,23 @@ def period_bounds(period, now):
     raise ValueError(f"unknown period {period!r}")
 
 
+def business_days(now, holidays):
+    """Monday to Friday days in now's UTC month, less the holidays that fall on them."""
+    first = now.date().replace(day=1)
+    following = (first + dt.timedelta(days=32)).replace(day=1)
+    days = (first + dt.timedelta(days=n) for n in range((following - first).days))
+    return sum(1 for d in days if d.weekday() < 5 and d not in holidays)
+
+
+def paced_limit(monthly_usd, now, holidays):
+    """A monthly budget as a daily limit: the budget over the month's business days.
+
+    Every day gets this limit, weekends and holidays included. They are left out of
+    the count so that a month of working days spends the budget.
+    """
+    return monthly_usd / business_days(now, holidays)
+
+
 def principal_of(arn, human_patterns, exempt_patterns):
     """Classify the caller in an invocation log record.
 
@@ -167,7 +184,17 @@ def handler(events, context):
     dry_run = str(cfg.get("DryRun", "false")).lower() == "true"
     period_start, period_end = period_bounds(cfg["Period"], now)
     block_minutes = int(cfg["BlockMinutes"])
-    defaults = {"human": float(cfg["HumanLimitUsd"]), "workload": float(cfg["WorkloadLimitUsd"])}
+    human = float(cfg["HumanLimitUsd"])
+    pacing = ""
+    if cfg.get("MonthlyBudgetUsd"):
+        holidays = {dt.date.fromisoformat(d) for d in json.loads(cfg.get("HolidaysJson") or "[]")}
+        human = paced_limit(float(cfg["MonthlyBudgetUsd"]), now, holidays)
+        pacing = (
+            f"Human daily limit: ${human:.2f}, ${float(cfg['MonthlyBudgetUsd']):.2f} a month"
+            f" over {business_days(now, holidays)} business days"
+        )
+    workload = float(cfg["WorkloadLimitUsd"]) if cfg.get("WorkloadLimitUsd") else 2 * human
+    defaults = {"human": human, "workload": workload}
     limits = json.loads(cfg["LimitsJson"])
     prices = json.loads(cfg["PricesJson"])
     warn_at = sorted(float(x) for x in json.loads(cfg["WarnAtJson"]))
@@ -247,6 +274,7 @@ def handler(events, context):
                 Subject=f"Bedrock spend limit: {cfg['Name']}"[:100],
                 Message="\n".join(
                     notes
+                    + ([pacing] if pacing else [])
                     + ["", f"Spend this {cfg['Period']} (USD):"]
                     + [f"  {k}: {v:.2f}" for k, v in sorted(spend.items(), key=lambda kv: -kv[1])]
                 ),
@@ -255,6 +283,7 @@ def handler(events, context):
     return {
         "dryRun": dry_run,
         "policyChanged": policy_changed,
+        "humanLimitUsd": round(human, 2),
         "notes": notes,
         "spend": {k: round(v, 4) for k, v in spend.items()},
     }

@@ -175,3 +175,48 @@ run "attach_to_roles" {
     error_message = "Each named role gets the block policy."
   }
 }
+
+run "pacing_passes_the_budget_and_holidays" {
+  command = plan
+
+  variables {
+    monthly_budget_usd = 250
+    holidays           = ["2026-10-12"]
+  }
+
+  assert {
+    condition     = jsondecode(aws_ssm_document.spend_limit.content).mainSteps[0].inputs.InputPayload.MonthlyBudgetUsd == "250"
+    error_message = "The script needs the monthly budget to pace it."
+  }
+
+  assert {
+    condition     = jsondecode(jsondecode(aws_ssm_document.spend_limit.content).mainSteps[0].inputs.InputPayload.HolidaysJson) == ["2026-10-12"]
+    error_message = "The script needs the holidays to count business days."
+  }
+
+  assert {
+    condition     = jsondecode(aws_ssm_document.spend_limit.content).mainSteps[0].inputs.InputPayload.WorkloadLimitUsd == ""
+    error_message = "With pacing and no workload_limit_usd, the script doubles the paced limit."
+  }
+}
+
+run "pacing_needs_a_daily_period" {
+  command = plan
+
+  variables {
+    monthly_budget_usd = 250
+    period             = "month"
+  }
+
+  expect_failures = [aws_ssm_document.spend_limit]
+}
+
+run "holidays_are_dates" {
+  command = plan
+
+  variables {
+    holidays = ["Oct 12"]
+  }
+
+  expect_failures = [var.holidays]
+}
