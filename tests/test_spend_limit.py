@@ -75,6 +75,16 @@ class Pacing(unittest.TestCase):
         self.assertAlmostEqual(sl.paced_limit(250, self.october, self.columbus), 250 / 21)
 
 
+class Usd(unittest.TestCase):
+    def test_cents_from_a_dollar_up(self):
+        self.assertEqual(sl.usd(250), "$250.00")
+        self.assertEqual(sl.usd(1234.5), "$1,234.50")
+
+    def test_four_places_below_a_dollar(self):
+        self.assertEqual(sl.usd(0.0238), "$0.0238")
+        self.assertEqual(sl.usd(0.0731), "$0.0731")
+
+
 class PrincipalOf(unittest.TestCase):
     def test_identity_center_user_is_human_keyed_by_session(self):
         p = sl.principal_of(

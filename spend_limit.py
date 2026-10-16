@@ -77,6 +77,11 @@ def period_bounds(period, now):
     raise ValueError(f"unknown period {period!r}")
 
 
+def usd(x):
+    """Dollars for a note: cents from $1 up, four places below, so small limits stay readable."""
+    return f"${x:,.2f}" if abs(x) >= 1 else f"${x:.4f}"
+
+
 def business_days(now, holidays):
     """Monday to Friday days in now's UTC month, less the holidays that fall on them."""
     first = now.date().replace(day=1)
@@ -190,7 +195,7 @@ def handler(events, context):
         holidays = {dt.date.fromisoformat(d) for d in json.loads(cfg.get("HolidaysJson") or "[]")}
         human = paced_limit(float(cfg["MonthlyBudgetUsd"]), now, holidays)
         pacing = (
-            f"Human daily limit: ${human:.2f}, ${float(cfg['MonthlyBudgetUsd']):.2f} a month"
+            f"Human daily limit: {usd(human)}, {usd(float(cfg['MonthlyBudgetUsd']))} a month"
             f" over {business_days(now, holidays)} business days"
         )
     workload = float(cfg["WorkloadLimitUsd"]) if cfg.get("WorkloadLimitUsd") else 2 * human
@@ -247,20 +252,20 @@ def handler(events, context):
                     spend[key] = spend.get(key, 0.0) + price(row, prices)
 
     # Warnings and new blocks.
-    for key, usd in sorted(spend.items()):
+    for key, spent in sorted(spend.items()):
         p = who[key]
         limit = limit_for(p, limits, overrides, defaults, now)
         entry = pstate.setdefault(key, {"warned": [], "sid": None})
         for frac in warn_at:
-            if usd >= frac * limit and frac not in entry["warned"] and usd < limit:
+            if spent >= frac * limit and frac not in entry["warned"] and spent < limit:
                 entry["warned"].append(frac)
-                notes.append(f"warning: {key} at ${usd:.2f}, {usd / limit:.0%} of ${limit:.2f}")
-        if usd >= limit and not entry.get("sid"):
+                notes.append(f"warning: {key} spent {usd(spent)}, {spent / limit:.0%} of its {usd(limit)} limit")
+        if spent >= limit and not entry.get("sid"):
             until = now + dt.timedelta(minutes=block_minutes) if block_minutes else period_end
             st = deny_statement(p, until)
             blocks[st["Sid"]] = st
             entry["sid"] = st["Sid"]
-            notes.append(f"blocked {key} until {until:%Y-%m-%d %H:%M} UTC: ${usd:.2f} of ${limit:.2f}")
+            notes.append(f"blocked {key} until {until:%Y-%m-%d %H:%M} UTC: spent {usd(spent)}, limit {usd(limit)}")
 
     new_statements = list(blocks.values()) or [PLACEHOLDER]
     policy_changed = new_statements != statements
@@ -276,14 +281,14 @@ def handler(events, context):
                     notes
                     + ([pacing] if pacing else [])
                     + ["", f"Spend this {cfg['Period']} (USD):"]
-                    + [f"  {k}: {v:.2f}" for k, v in sorted(spend.items(), key=lambda kv: -kv[1])]
+                    + [f"  {k}: {usd(v)}" for k, v in sorted(spend.items(), key=lambda kv: -kv[1])]
                 ),
             )
 
     return {
         "dryRun": dry_run,
         "policyChanged": policy_changed,
-        "humanLimitUsd": round(human, 2),
+        "humanLimitUsd": round(human, 4),
         "notes": notes,
         "spend": {k: round(v, 4) for k, v in spend.items()},
     }

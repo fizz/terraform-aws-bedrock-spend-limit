@@ -34,7 +34,7 @@ The limit reads Bedrock's model invocation logs in CloudWatch Logs. If an accoun
 ```hcl
 module "bedrock_logging_east" {
   source          = "fizz/bedrock-spend-limit/aws//modules/invocation-logging"
-  deliver_content = false # metadata only (caller, model, token counts): not yet verified to produce records
+  deliver_content = false # metadata only: caller, model and token counts, which is all the limit reads
 }
 ```
 
