@@ -220,3 +220,80 @@ run "holidays_are_dates" {
 
   expect_failures = [var.holidays]
 }
+
+run "email_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = jsondecode(aws_ssm_document.spend_limit.content).mainSteps[0].inputs.InputPayload.EmailJson == ""
+    error_message = "Without email, the script sends no email."
+  }
+
+  assert {
+    condition     = !contains([for s in jsondecode(aws_iam_role_policy.automation.policy).Statement : s.Sid], "Email")
+    error_message = "Without email, the automation gets no SES permission."
+  }
+}
+
+run "email_passes_recipients_and_exclusions" {
+  command = plan
+
+  variables {
+    email = {
+      from    = "Reports <no-reply@reports.example.com>"
+      to      = ["a@example.org"]
+      bcc     = ["b@example.com"]
+      exclude = ["user:test"]
+    }
+  }
+
+  assert {
+    condition = jsondecode(jsondecode(aws_ssm_document.spend_limit.content).mainSteps[0].inputs.InputPayload.EmailJson) == {
+      from     = "Reports <no-reply@reports.example.com>"
+      to       = ["a@example.org"]
+      bcc      = ["b@example.com"]
+      reply_to = []
+      exclude  = ["user:test"]
+    }
+    error_message = "The script needs every email field, defaults included."
+  }
+
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.automation.policy).Statement : s if s.Sid == "Email"]).Condition.StringEquals["ses:FromAddress"] == "no-reply@reports.example.com"
+    error_message = "The automation may send only from the bare sender address."
+  }
+
+  assert {
+    condition = one([for s in jsondecode(aws_iam_role_policy.automation.policy).Statement : s if s.Sid == "Email"]).Resource == [
+      "arn:aws:ses:us-east-1:111122223333:identity/no-reply@reports.example.com",
+      "arn:aws:ses:us-east-1:111122223333:identity/reports.example.com",
+    ]
+    error_message = "SES checks the sender's address identity or its domain identity, in the automation's Region."
+  }
+}
+
+run "email_needs_a_recipient" {
+  command = plan
+
+  variables {
+    email = {
+      from = "no-reply@example.com"
+      to   = []
+    }
+  }
+
+  expect_failures = [var.email]
+}
+
+run "email_from_is_an_address" {
+  command = plan
+
+  variables {
+    email = {
+      from = "Reports"
+      to   = ["a@example.org"]
+    }
+  }
+
+  expect_failures = [var.email]
+}

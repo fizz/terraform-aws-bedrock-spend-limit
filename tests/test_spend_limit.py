@@ -163,5 +163,48 @@ class DenyStatement(unittest.TestCase):
         self.assertNotEqual(a["Sid"], b["Sid"])
 
 
+
+class Notice(unittest.TestCase):
+    notes = [
+        ("user:gary", "warning: user:gary spent $40.00, 80% of its $50.00 limit"),
+        ("user:test", "blocked user:test until 2026-10-15 00:00 UTC: spent $5.10, limit $5.00"),
+    ]
+    spend = {"user:test": 5.1, "user:gary": 40.0, "user:testing": 1.0}
+
+    def test_every_note_and_spend_ranked_by_amount(self):
+        self.assertEqual(
+            sl.notice(self.notes, "", "day", self.spend).split("\n"),
+            [
+                "warning: user:gary spent $40.00, 80% of its $50.00 limit",
+                "blocked user:test until 2026-10-15 00:00 UTC: spent $5.10, limit $5.00",
+                "",
+                "Spend this day (USD):",
+                "  user:gary: $40.00",
+                "  user:test: $5.10",
+                "  user:testing: $1.00",
+            ],
+        )
+
+    def test_pacing_follows_the_notes(self):
+        text = sl.notice(self.notes[:1], "Human daily limit: $50.00", "day", {})
+        self.assertEqual(text.split("\n")[1], "Human daily limit: $50.00")
+
+    def test_excluded_principal_is_left_out_by_key(self):
+        text = sl.notice(self.notes, "", "day", self.spend, {"user:test"})
+        self.assertNotIn("user:test ", text)
+        self.assertNotIn("user:test:", text)
+        self.assertIn("user:testing: $1.00", text)
+
+    def test_nothing_to_send_when_only_excluded_notes(self):
+        self.assertIsNone(sl.notice(self.notes[1:], "", "day", self.spend, {"user:test"}))
+
+    def test_nothing_to_send_without_notes(self):
+        self.assertIsNone(sl.notice([], "pacing", "day", self.spend))
+
+    def test_unblock_by_sid_alone_is_never_excluded(self):
+        notes = [(None, "unblocked BlockAbc, block ended 2026-10-15 00:00 UTC")]
+        self.assertIsNotNone(sl.notice(notes, "", "day", {}, {"user:test"}))
+
+
 if __name__ == "__main__":
     unittest.main()

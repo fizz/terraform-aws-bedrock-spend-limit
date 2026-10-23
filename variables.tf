@@ -144,9 +144,38 @@ variable "dry_run" {
 }
 
 variable "alert_emails" {
-  description = "Addresses that get warnings, blocks and unblocks. Each address must confirm the subscription."
+  description = "Addresses that get warnings, blocks and unblocks through the SNS topic. Each address must confirm the subscription. For addresses that must not have to confirm anything, use email."
   type        = list(string)
   default     = []
+}
+
+variable "email" {
+  description = <<-EOT
+    Sends warnings, blocks and unblocks through SES too, from the automation's Region.
+    Recipients confirm nothing. from is an address, with or without a display name
+    ("Name <a@example.com>"), on an SES identity (the address or its domain) that can
+    send to the recipients. exclude takes principal keys (user:<session>, role:<role>,
+    iam-user:<name>) whose notes and spend are left out of these emails. A notice with
+    no note left is not sent. The SNS topic still gets everything. Null sends no email.
+  EOT
+  type = object({
+    from     = string
+    to       = list(string)
+    bcc      = optional(list(string), [])
+    reply_to = optional(list(string), [])
+    exclude  = optional(list(string), [])
+  })
+  default = null
+
+  validation {
+    condition     = var.email == null ? true : can(regex("([^<>\\s]+@[^<>\\s]+)>?\\s*$", var.email.from))
+    error_message = "email.from must be an address, optionally as \"Name <address>\"."
+  }
+
+  validation {
+    condition     = var.email == null ? true : length(var.email.to) + length(var.email.bcc) > 0
+    error_message = "email needs at least one address in to or bcc."
+  }
 }
 
 variable "kms_key_id" {

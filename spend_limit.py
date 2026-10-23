@@ -6,8 +6,8 @@ Runs inside SSM Automation (aws:executeScript) on a schedule. Each run:
    invocation logs in each Region.
 2. Drops blocks whose time is up. That principal's spend then counts again from the
    moment the block ended, so the usage that caused the block does not cause another.
-3. Emails a warning when a principal passes a warning threshold, once per threshold
-   per period.
+3. Sends a warning when a principal passes a warning threshold, once per threshold
+   per period: to the SNS topic, and through SES when an email is configured.
 4. Blocks each principal over its limit with a deny statement in one managed policy.
    Each deny ends by itself through aws:CurrentTime, even if this script stops.
 
@@ -80,6 +80,24 @@ def period_bounds(period, now):
 def usd(x):
     """Dollars for a note: cents from $1 up, four places below, so small limits stay readable."""
     return f"${x:,.2f}" if abs(x) >= 1 else f"${x:.4f}"
+
+
+def notice(notes, pacing, period, spend, exclude=()):
+    """The text of a notice: the notes, the pacing, and each principal's spend.
+
+    notes are (principal key, text) pairs. Notes and spend of the principals in exclude
+    are left out. Returns None when no note is left.
+    """
+    texts = [text for key, text in notes if key not in exclude]
+    if not texts:
+        return None
+    ranked = sorted(spend.items(), key=lambda kv: -kv[1])
+    return "\n".join(
+        texts
+        + ([pacing] if pacing else [])
+        + ["", f"Spend this {period} (USD):"]
+        + [f"  {k}: {usd(v)}" for k, v in ranked if k not in exclude]
+    )
 
 
 def business_days(now, holidays):
@@ -227,7 +245,7 @@ def handler(events, context):
             key = next((k for k, v in pstate.items() if v.get("sid") == sid), None)
             if key:
                 pstate[key].update({"since": end.isoformat(), "sid": None, "warned": []})
-            notes.append(f"unblocked {key or sid}, block ended {end:%Y-%m-%d %H:%M} UTC")
+            notes.append((key, f"unblocked {key or sid}, block ended {end:%Y-%m-%d %H:%M} UTC"))
 
     # Spend this period, per principal, from the start of their window.
     rows = []
@@ -259,13 +277,13 @@ def handler(events, context):
         for frac in warn_at:
             if spent >= frac * limit and frac not in entry["warned"] and spent < limit:
                 entry["warned"].append(frac)
-                notes.append(f"warning: {key} spent {usd(spent)}, {spent / limit:.0%} of its {usd(limit)} limit")
+                notes.append((key, f"warning: {key} spent {usd(spent)}, {spent / limit:.0%} of its {usd(limit)} limit"))
         if spent >= limit and not entry.get("sid"):
             until = now + dt.timedelta(minutes=block_minutes) if block_minutes else period_end
             st = deny_statement(p, until)
             blocks[st["Sid"]] = st
             entry["sid"] = st["Sid"]
-            notes.append(f"blocked {key} until {until:%Y-%m-%d %H:%M} UTC: spent {usd(spent)}, limit {usd(limit)}")
+            notes.append((key, f"blocked {key} until {until:%Y-%m-%d %H:%M} UTC: spent {usd(spent)}, limit {usd(limit)}"))
 
     new_statements = list(blocks.values()) or [PLACEHOLDER]
     policy_changed = new_statements != statements
@@ -273,23 +291,20 @@ def handler(events, context):
         if policy_changed:
             _write_policy(iam, cfg["PolicyArn"], new_statements)
         _write_json_parameter(ssm, cfg["StateParameter"], state)
-        if notes and cfg.get("TopicArn"):
-            boto3.client("sns").publish(
-                TopicArn=cfg["TopicArn"],
-                Subject=f"Bedrock spend limit: {cfg['Name']}"[:100],
-                Message="\n".join(
-                    notes
-                    + ([pacing] if pacing else [])
-                    + ["", f"Spend this {cfg['Period']} (USD):"]
-                    + [f"  {k}: {usd(v)}" for k, v in sorted(spend.items(), key=lambda kv: -kv[1])]
-                ),
-            )
+        subject = f"Bedrock spend limit: {cfg['Name']}"[:100]
+        message = notice(notes, pacing, cfg["Period"], spend)
+        if message and cfg.get("TopicArn"):
+            boto3.client("sns").publish(TopicArn=cfg["TopicArn"], Subject=subject, Message=message)
+        email = json.loads(cfg.get("EmailJson") or "null")
+        body = email and notice(notes, pacing, cfg["Period"], spend, set(email["exclude"]))
+        if body:
+            _send_email(email, subject, body)
 
     return {
         "dryRun": dry_run,
         "policyChanged": policy_changed,
         "humanLimitUsd": round(human, 4),
-        "notes": notes,
+        "notes": [text for _, text in notes],
         "spend": {k: round(v, 4) for k, v in spend.items()},
     }
 
@@ -311,6 +326,18 @@ def _query(region, log_group, start, end):
     if res["status"] != "Complete":
         raise RuntimeError(f"Logs Insights query in {region} ended {res['status']}")
     return [{f["field"]: f["value"] for f in r} for r in res["results"]]
+
+
+def _send_email(email, subject, body):
+    boto3.client("sesv2").send_email(
+        FromEmailAddress=email["from"],
+        Destination={"ToAddresses": email["to"], "BccAddresses": email["bcc"]},
+        ReplyToAddresses=email["reply_to"],
+        Content={"Simple": {
+            "Subject": {"Data": subject, "Charset": "UTF-8"},
+            "Body": {"Text": {"Data": body, "Charset": "UTF-8"}},
+        }},
+    )
 
 
 def _policy_statements(iam, arn):
