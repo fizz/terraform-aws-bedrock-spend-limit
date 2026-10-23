@@ -67,6 +67,18 @@ aws ssm put-parameter --overwrite --name /bedrock-spend-limit/overrides \
   --value '{"role:app-api": {"limit_usd": 500, "until": "2026-10-15T00:00:00Z"}}'
 ```
 
+**Email that nobody has to confirm.** `alert_emails` subscribes each address to the SNS topic, and SNS sends nothing to an address until it confirms that one subscription. For people outside the team, such as a customer's managers, `email` sends the same notices through SES from the automation's Region, to addresses that confirm nothing. The sender needs an SES identity (the address or its domain) that can send to them, and the automation may send only from that address. `exclude` leaves a principal's notes and spend out of these emails, for example a test user; a notice with nothing else in it is not sent. The SNS topic still gets everything:
+
+```hcl
+  alert_emails = ["platform@example.com"]
+  email = {
+    from    = "Platform <no-reply@reports.example.com>"
+    to      = ["manager@customer.example"]
+    bcc     = ["platform@example.com"]
+    exclude = ["user:test-user"]
+  }
+```
+
 **Attaching the block policy** is how the limit reaches a principal. `attach_to_roles` does it for IAM roles. For an Identity Center permission set, attach the policy by name in the permission set (`aws_ssoadmin_customer_managed_policy_attachment` with `policy_name` output), so the reserved role in each account gets it.
 
 ## What is hard to get right

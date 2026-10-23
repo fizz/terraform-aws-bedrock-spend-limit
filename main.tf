@@ -3,7 +3,7 @@
 #   EventBridge rule (schedule) -> SSM Automation, aws:executeScript (spend_limit.py)
 #     reads:  Bedrock invocation logs in each Region, through Logs Insights
 #     writes: deny statements in one managed policy, as a new policy version
-#     tells:  SNS, on warnings, blocks and unblocks
+#     tells:  SNS, on warnings, blocks and unblocks; and SES, when var.email is set
 #
 # The managed policy does nothing until it is attached: to roles through
 # attach_to_roles, or by name in an Identity Center permission set.
@@ -26,6 +26,10 @@ locals {
   ]
 
   automation_definition_arn = "arn:${local.partition}:ssm:${local.region}:${local.account_id}:automation-definition/${var.name}"
+
+  # The bare address of var.email.from, which may carry a display name.
+  emails       = var.email == null ? [] : [var.email]
+  from_address = [for e in local.emails : regex("([^<>\\s]+@[^<>\\s]+)>?\\s*$", e.from)[0]]
 }
 
 # -----------------------------------------------------------------------------
@@ -132,7 +136,7 @@ resource "aws_iam_role_policy" "automation" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid      = "QueryInvocationLogs"
         Effect   = "Allow"
@@ -169,7 +173,19 @@ resource "aws_iam_role_policy" "automation" {
         Action   = ["sns:Publish"]
         Resource = aws_sns_topic.alerts.arn
       },
-    ]
+      ], [
+      # SES checks the identity that matches the sender: the address, or its domain.
+      for a in local.from_address : {
+        Sid    = "Email"
+        Effect = "Allow"
+        Action = ["ses:SendEmail"]
+        Resource = [
+          "arn:${local.partition}:ses:${local.region}:${local.account_id}:identity/${a}",
+          "arn:${local.partition}:ses:${local.region}:${local.account_id}:identity/${split("@", a)[1]}",
+        ]
+        Condition = { StringEquals = { "ses:FromAddress" = a } }
+      }
+    ])
   })
 }
 
@@ -221,6 +237,7 @@ resource "aws_ssm_document" "spend_limit" {
           StateParameter     = aws_ssm_parameter.state.name
           OverrideParameter  = aws_ssm_parameter.overrides.name
           TopicArn           = aws_sns_topic.alerts.arn
+          EmailJson          = var.email == null ? "" : jsonencode(var.email)
           DryRun             = "{{ DryRun }}"
         }
       }
