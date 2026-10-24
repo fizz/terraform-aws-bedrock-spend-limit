@@ -15,7 +15,7 @@ mock_provider "aws" {
 
   mock_data "aws_region" {
     defaults = {
-      id = "us-east-1"
+      region = "us-east-1"
     }
   }
 
@@ -122,7 +122,7 @@ run "govcloud_arns" {
 
   override_data {
     target = data.aws_region.current
-    values = { id = "us-gov-east-1" }
+    values = { region = "us-gov-east-1" }
   }
 
   variables {
