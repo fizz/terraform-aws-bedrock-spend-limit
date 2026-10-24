@@ -15,7 +15,7 @@ data "aws_region" "current" {}
 locals {
   account_id = data.aws_caller_identity.current.account_id
   partition  = data.aws_partition.current.partition
-  region     = data.aws_region.current.id
+  region     = data.aws_region.current.region
 
   # With pacing, the human limit changes month to month, so the script doubles it.
   paced              = var.monthly_budget_usd != null

@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        provider: ["5.100.0", "6.0.0"]
+        provider: ["6.0.0", "latest"]
     steps:
       - uses: actions/checkout@v4
 
@@ -59,9 +59,13 @@ jobs:
         with:
           terraform_wrapper: false
 
-      # Pins the provider so the module is checked against both major versions it supports.
+      # Pins the provider to the lowest version the module supports. The latest leg
+      # leaves the constraint alone. The grep fails the job if the sed matched nothing.
       - name: pin the provider
-        run: sed -i 's/version = ">= 5.0"/version = "= ${{ matrix.provider }}"/' versions.tf
+        if: matrix.provider != 'latest'
+        run: |
+          sed -i 's/version = ">= 6.0"/version = "= ${{ matrix.provider }}"/' versions.tf
+          grep -q 'version = "= ${{ matrix.provider }}"' versions.tf
 
       - name: terraform validate
         run: |
