@@ -164,9 +164,19 @@ class DenyStatement(unittest.TestCase):
 
 
 
+class Warning(unittest.TestCase):
+    def test_a_person_has_their_limit(self):
+        p = {"key": "user:gary", "kind": "human"}
+        self.assertEqual(sl.warning(p, 40.0, 50.0), "warning: user:gary spent $40.00, 80% of their $50.00 limit")
+
+    def test_a_workload_has_its_limit(self):
+        p = {"key": "role:batch-api", "kind": "workload"}
+        self.assertEqual(sl.warning(p, 80.0, 100.0), "warning: role:batch-api spent $80.00, 80% of its $100.00 limit")
+
+
 class Notice(unittest.TestCase):
     notes = [
-        ("user:gary", "warning: user:gary spent $40.00, 80% of its $50.00 limit"),
+        ("user:gary", "warning: user:gary spent $40.00, 80% of their $50.00 limit"),
         ("user:test", "blocked user:test until 2026-10-15 00:00 UTC: spent $5.10, limit $5.00"),
     ]
     spend = {"user:test": 5.1, "user:gary": 40.0, "user:testing": 1.0}
@@ -175,7 +185,7 @@ class Notice(unittest.TestCase):
         self.assertEqual(
             sl.notice(self.notes, "", "day", self.spend).split("\n"),
             [
-                "warning: user:gary spent $40.00, 80% of its $50.00 limit",
+                "warning: user:gary spent $40.00, 80% of their $50.00 limit",
                 "blocked user:test until 2026-10-15 00:00 UTC: spent $5.10, limit $5.00",
                 "",
                 "Spend this day (USD):",

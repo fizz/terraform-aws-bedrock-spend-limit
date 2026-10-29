@@ -175,6 +175,12 @@ def limit_for(principal, limits, overrides, defaults, now):
     return float(defaults[principal["kind"]])
 
 
+def warning(principal, spent, limit):
+    # A person has "their" limit, a workload role or IAM user "its".
+    owner = "their" if principal["kind"] == "human" else "its"
+    return f"warning: {principal['key']} spent {usd(spent)}, {spent / limit:.0%} of {owner} {usd(limit)} limit"
+
+
 def deny_statement(principal, until):
     digest = hashlib.sha1(principal["key"].encode()).hexdigest()[:8]
     sid = SID_PREFIX + re.sub(r"[^A-Za-z0-9]", "", principal["name"].title())[:48] + digest
@@ -277,7 +283,7 @@ def handler(events, context):
         for frac in warn_at:
             if spent >= frac * limit and frac not in entry["warned"] and spent < limit:
                 entry["warned"].append(frac)
-                notes.append((key, f"warning: {key} spent {usd(spent)}, {spent / limit:.0%} of its {usd(limit)} limit"))
+                notes.append((key, warning(p, spent, limit)))
         if spent >= limit and not entry.get("sid"):
             until = now + dt.timedelta(minutes=block_minutes) if block_minutes else period_end
             st = deny_statement(p, until)
