@@ -235,6 +235,23 @@ run "email_is_off_by_default" {
   }
 }
 
+run "email_passes_inclusions" {
+  command = plan
+
+  variables {
+    email = {
+      from    = "Reports <no-reply@reports.example.com>"
+      to      = ["a@example.org"]
+      include = ["user:alice"]
+    }
+  }
+
+  assert {
+    condition     = jsondecode(jsondecode(aws_ssm_document.spend_limit.content).mainSteps[0].inputs.InputPayload.EmailJson).include == ["user:alice"]
+    error_message = "include reaches the script as a list."
+  }
+}
+
 run "email_passes_recipients_and_exclusions" {
   command = plan
 
@@ -254,6 +271,7 @@ run "email_passes_recipients_and_exclusions" {
       bcc      = ["b@example.com"]
       reply_to = []
       exclude  = ["user:test"]
+      include  = null
     }
     error_message = "The script needs every email field, defaults included."
   }

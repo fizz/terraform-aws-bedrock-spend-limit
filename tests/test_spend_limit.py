@@ -211,9 +211,32 @@ class Notice(unittest.TestCase):
     def test_nothing_to_send_without_notes(self):
         self.assertIsNone(sl.notice([], "pacing", "day", self.spend))
 
+    def test_only_included_principals_are_shown(self):
+        text = sl.notice(self.notes, "", "day", self.spend, include={"user:gary"})
+        self.assertEqual(
+            text.split("\n"),
+            [
+                "warning: user:gary spent $40.00, 80% of their $50.00 limit",
+                "",
+                "Spend this day (USD):",
+                "  user:gary: $40.00",
+            ],
+        )
+
+    def test_nothing_to_send_when_only_notes_outside_include(self):
+        self.assertIsNone(sl.notice(self.notes[1:], "", "day", self.spend, include={"user:gary"}))
+
+    def test_empty_include_shows_nobody(self):
+        self.assertIsNone(sl.notice(self.notes, "", "day", self.spend, include=set()))
+
+    def test_exclude_applies_inside_include(self):
+        text = sl.notice(self.notes, "", "day", self.spend, {"user:test"}, {"user:gary", "user:test"})
+        self.assertNotIn("user:test", text)
+
     def test_unblock_by_sid_alone_is_never_excluded(self):
         notes = [(None, "unblocked BlockAbc, block ended 2026-10-15 00:00 UTC")]
         self.assertIsNotNone(sl.notice(notes, "", "day", {}, {"user:test"}))
+        self.assertIsNotNone(sl.notice(notes, "", "day", {}, include=set()))
 
 
 if __name__ == "__main__":

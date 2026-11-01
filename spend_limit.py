@@ -82,13 +82,17 @@ def usd(x):
     return f"${x:,.2f}" if abs(x) >= 1 else f"${x:.4f}"
 
 
-def notice(notes, pacing, period, spend, exclude=()):
+def notice(notes, pacing, period, spend, exclude=(), include=None):
     """The text of a notice: the notes, the pacing, and each principal's spend.
 
     notes are (principal key, text) pairs. Notes and spend of the principals in exclude
-    are left out. Returns None when no note is left.
+    are left out. When include is not None, only the principals in it stay in; a note
+    with no principal key stays in either way. Returns None when no note is left.
     """
-    texts = [text for key, text in notes if key not in exclude]
+    def shown(key):
+        return key not in exclude and (include is None or key in include)
+
+    texts = [text for key, text in notes if key is None or shown(key)]
     if not texts:
         return None
     ranked = sorted(spend.items(), key=lambda kv: -kv[1])
@@ -96,7 +100,7 @@ def notice(notes, pacing, period, spend, exclude=()):
         texts
         + ([pacing] if pacing else [])
         + ["", f"Spend this {period} (USD):"]
-        + [f"  {k}: {usd(v)}" for k, v in ranked if k not in exclude]
+        + [f"  {k}: {usd(v)}" for k, v in ranked if shown(k)]
     )
 
 
@@ -302,7 +306,11 @@ def handler(events, context):
         if message and cfg.get("TopicArn"):
             boto3.client("sns").publish(TopicArn=cfg["TopicArn"], Subject=subject, Message=message)
         email = json.loads(cfg.get("EmailJson") or "null")
-        body = email and notice(notes, pacing, cfg["Period"], spend, set(email["exclude"]))
+        include = email and email.get("include")
+        body = email and notice(
+            notes, pacing, cfg["Period"], spend, set(email.get("exclude") or []),
+            None if include is None else set(include),
+        )
         if body:
             _send_email(email, subject, body)
 
