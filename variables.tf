@@ -155,8 +155,11 @@ variable "email" {
     Recipients confirm nothing. from is an address, with or without a display name
     ("Name <a@example.com>"), on an SES identity (the address or its domain) that can
     send to the recipients. exclude takes principal keys (user:<session>, role:<role>,
-    iam-user:<name>) whose notes and spend are left out of these emails. A notice with
-    no note left is not sent. The SNS topic still gets everything. Null sends no email.
+    iam-user:<name>) whose notes and spend are left out of these emails. include, when
+    set, takes the only principal keys whose notes and spend go into these emails; a
+    principal added later stays out until it is listed. exclude applies too. A notice
+    with no note left is not sent. The SNS topic still gets everything. Null sends no
+    email.
   EOT
   type = object({
     from     = string
@@ -164,6 +167,7 @@ variable "email" {
     bcc      = optional(list(string), [])
     reply_to = optional(list(string), [])
     exclude  = optional(list(string), [])
+    include  = optional(list(string))
   })
   default = null
 
