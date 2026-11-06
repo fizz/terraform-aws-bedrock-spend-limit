@@ -72,7 +72,30 @@ class Pacing(unittest.TestCase):
         self.assertEqual(sl.business_days(december, {dt.date(2026, 12, 25)}), 22)
 
     def test_paced_limit_spreads_the_budget(self):
-        self.assertAlmostEqual(sl.paced_limit(250, self.october, self.columbus), 250 / 21)
+        limit, days = sl.paced_limit(250, self.october, self.columbus)
+        self.assertAlmostEqual(limit, 250 / 21)
+        self.assertEqual(days, 21)
+
+    def test_paced_week_is_the_rate_times_the_weeks_business_days(self):
+        # This Wednesday's week is Monday Oct 12 to Sunday Oct 18, with Columbus Day.
+        limit, days = sl.paced_limit(250, self.october, self.columbus, "week")
+        self.assertAlmostEqual(limit, 4 * (250 / 21))
+        self.assertEqual(days, 4)
+
+    def test_paced_week_without_a_holiday_has_five_days(self):
+        now = dt.datetime(2026, 10, 28, 9, tzinfo=UTC)  # a Wednesday's week with no holiday in it
+        limit, days = sl.paced_limit(250, now, self.columbus, "week")
+        self.assertAlmostEqual(limit, 5 * (250 / 21))
+        self.assertEqual(days, 5)
+
+    def test_paced_week_ignores_non_weekdays(self):
+        limit, days = sl.paced_limit(250, self.october, {dt.date(2026, 10, 13)}, "week")
+        self.assertAlmostEqual(limit, 4 * (250 / 21))
+        self.assertEqual(days, 4)
+
+    def test_pacing_is_undefined_for_month(self):
+        with self.assertRaises(ValueError):
+            sl.paced_limit(250, self.october, set(), "month")
 
 
 class Usd(unittest.TestCase):
