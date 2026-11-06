@@ -7,7 +7,9 @@ Runs inside SSM Automation (aws:executeScript) on a schedule. Each run:
 2. Drops blocks whose time is up. That principal's spend then counts again from the
    moment the block ended, so the usage that caused the block does not cause another.
 3. Sends a warning when a principal passes a warning threshold, once per threshold
-   per period: to the SNS topic, and through SES when an email is configured.
+   per period: to the SNS topic, and through SES when an email is configured. Both
+   channels take the notice's recipient filter from the email config (include and
+   exclude), and a run with nothing to say sends nothing to either.
 4. Blocks each principal over its limit with a deny statement in one managed policy,
    each deny ending by itself through aws:CurrentTime even if this script stops.
    With enforcement = warn there are no deny statements: any still in the policy are
@@ -340,18 +342,22 @@ def handler(events, context):
             _write_policy(iam, cfg["PolicyArn"], new_statements)
         _write_json_parameter(ssm, cfg["StateParameter"], state)
         subject = f"Bedrock spend limit ({'warning' if warn_only else 'threshold notice'}): {cfg['Name']}"[:100]
+        # The banner rides along only when there is a notice. Inserted unconditionally,
+        # a quiet run emails the banner and the spend block to everyone, every time.
         out_notes = list(notes)
-        if warn_only:
+        if warn_only and out_notes:
             out_notes.insert(0, (None, "This is a spend warning from the Bedrock spend limit. It warns and does not block access."))
-        message = notice(out_notes, pacing, cfg["Period"], spend)
+        email = json.loads(cfg.get("EmailJson") or "null")
+        # The SNS topic gets the same filter as the email: who a notice is for is set
+        # per deployment in the email config (include, exclude).
+        shown = (
+            set(email.get("exclude") or []) if email else set(),
+            None if not (email and email.get("include")) else set(email["include"]),
+        )
+        message = notice(out_notes, pacing, cfg["Period"], spend, *shown)
         if message and cfg.get("TopicArn"):
             boto3.client("sns").publish(TopicArn=cfg["TopicArn"], Subject=subject, Message=message)
-        email = json.loads(cfg.get("EmailJson") or "null")
-        include = email and email.get("include")
-        body = email and notice(
-            out_notes, pacing, cfg["Period"], spend, set(email.get("exclude") or []),
-            None if include is None else set(include),
-        )
+        body = email and notice(out_notes, pacing, cfg["Period"], spend, *shown)
         if body:
             _send_email(email, subject, body)
 
