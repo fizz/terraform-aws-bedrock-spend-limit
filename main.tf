@@ -197,7 +197,7 @@ resource "aws_ssm_document" "spend_limit" {
 
   content = jsonencode({
     schemaVersion = "0.3"
-    description   = "Bedrock spend limit: warns and blocks principals past their limit for the ${var.period}."
+    description   = "Bedrock spend limit: ${var.enforcement == "warn" ? "warns" : "warns and blocks"} principals past their limit for the ${var.period}."
     assumeRole    = "{{ AutomationAssumeRole }}"
     parameters = {
       AutomationAssumeRole = {
@@ -221,6 +221,7 @@ resource "aws_ssm_document" "spend_limit" {
         InputPayload = {
           Name               = var.name
           Period             = var.period
+          Enforcement        = var.enforcement
           BlockMinutes       = tostring(var.block_minutes)
           HumanLimitUsd      = tostring(var.human_limit_usd)
           MonthlyBudgetUsd   = local.paced ? tostring(var.monthly_budget_usd) : ""
@@ -246,8 +247,8 @@ resource "aws_ssm_document" "spend_limit" {
 
   lifecycle {
     precondition {
-      condition     = !local.paced || var.period == "day"
-      error_message = "monthly_budget_usd paces spend as a daily limit, so it needs period = \"day\"."
+      condition     = !local.paced || contains(["day", "week"], var.period)
+      error_message = "monthly_budget_usd paces spend at one daily rate across day or week periods, so it needs period = \"day\" or \"week\"."
     }
   }
 }

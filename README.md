@@ -50,7 +50,7 @@ Workloads are keyed by role because their session names change with every pod an
 
 `limits` sets a limit for a named principal, and `exempt_patterns` leaves callers out entirely.
 
-**A monthly budget, paced by the day.** With `period = "day"`, `monthly_budget_usd` replaces `human_limit_usd` with the budget divided by the business days in the current month, recomputed each run. Nobody can spend the month in a week, and a month of working days spends the budget. Weekends and holidays get the same daily limit; they are only left out of the count. `holidays` takes the dates that are not business days, and `scripts/holidays.py` writes a country's public holidays as JSON:
+**A monthly budget, paced by the day.** With `period = "day"`, `monthly_budget_usd` replaces `human_limit_usd` with the budget divided by the business days in the current month, recomputed each run. Nobody can spend the month in a week, and a month of working days spends the budget. Weekends and holidays get the same daily limit; they are only left out of the count. With `period = "week"`, the limit is that same daily rate times the business days in the current week, so a week with a holiday warns lower and the weeks together spend the budget. `holidays` takes the dates that are not business days, and `scripts/holidays.py` writes a country's public holidays as JSON:
 
 ```hcl
   period             = "day"
@@ -94,6 +94,8 @@ With `include`, only the listed customer users appear:
 ## What is hard to get right
 
 **Blocks must end on their own.** Each deny carries `aws:CurrentTime` as its expiry. If the schedule stops, or the automation breaks, nobody stays blocked past the end of the period.
+
+**Some deployments want to warn only.** With `enforcement = "warn"` the automation writes no deny statement and removes any still in the policy — useful when the limit is guidance for people who must not be locked out, like customer developers hosted in an account of yours. A principal past its limit gets one notice per period, and the limit's emails and SNS otherwise behave the same.
 
 **A deny in a policy stops sessions that already exist.** IAM evaluates the policy on every request, so a block also stops a session that was issued hours ago, and a Bedrock API key made from one. Removing a permission set assignment would not: the session keeps working until it expires.
 

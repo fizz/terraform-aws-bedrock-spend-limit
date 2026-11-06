@@ -42,7 +42,7 @@ variable "human_limit_usd" {
 }
 
 variable "monthly_budget_usd" {
-  description = "Spend per human per calendar month, in USD, paced as a daily limit: the budget divided by the business days in the current month. Needs period = day, and replaces human_limit_usd. Null turns pacing off."
+  description = "Spend per human per calendar month, in USD, paced at one daily rate: for period = day, the budget divided by the month's business days, every day; for period = week, that rate times the week's business days. Needs period = day or week, and replaces human_limit_usd. Null turns pacing off."
   type        = number
   default     = null
 
@@ -87,9 +87,20 @@ variable "warn_at" {
 }
 
 variable "block_minutes" {
-  description = "How long a block lasts. 0 blocks until the period ends."
+  description = "How long a block lasts. 0 blocks until the period ends. Has no effect when enforcement = warn."
   type        = number
   default     = 0
+}
+
+variable "enforcement" {
+  description = "What happens when a principal passes its limit: \"block\" denies Bedrock until the block ends, \"warn\" sends a notice, never denies, and removes any deny statements still in the policy."
+  type        = string
+  default     = "block"
+
+  validation {
+    condition     = contains(["block", "warn"], var.enforcement)
+    error_message = "enforcement must be block or warn."
+  }
 }
 
 variable "human_role_patterns" {

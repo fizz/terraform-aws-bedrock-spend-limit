@@ -8,8 +8,10 @@ Runs inside SSM Automation (aws:executeScript) on a schedule. Each run:
    moment the block ended, so the usage that caused the block does not cause another.
 3. Sends a warning when a principal passes a warning threshold, once per threshold
    per period: to the SNS topic, and through SES when an email is configured.
-4. Blocks each principal over its limit with a deny statement in one managed policy.
-   Each deny ends by itself through aws:CurrentTime, even if this script stops.
+4. Blocks each principal over its limit with a deny statement in one managed policy,
+   each deny ending by itself through aws:CurrentTime even if this script stops.
+   With enforcement = warn there are no deny statements: any still in the policy are
+   removed, and a principal at its limit gets one notice per period instead.
 
 Principals:
   human     a role session whose role name matches a human pattern (by default
@@ -112,13 +114,29 @@ def business_days(now, holidays):
     return sum(1 for d in days if d.weekday() < 5 and d not in holidays)
 
 
-def paced_limit(monthly_usd, now, holidays):
-    """A monthly budget as a daily limit: the budget over the month's business days.
+def paced_limit(monthly_usd, now, holidays, period="day"):
+    """A monthly budget as the default human limit for now's period, at one daily rate.
 
-    Every day gets this limit, weekends and holidays included. They are left out of
-    the count so that a month of working days spends the budget.
+    The rate is the budget over the month's business days. Period \"day\" gives every
+    day that rate; weekends and holidays get it too, they are only left out of the
+    count, so that a month of working days spends the budget. Period \"week\" gives
+    the rate times the business days in now's Monday-to-Sunday week, so a holiday
+    week warns lower and the weeks together spend the month. Returns the limit and
+    the business-day count it came from, for the notice text.
     """
-    return monthly_usd / business_days(now, holidays)
+    rate = monthly_usd / business_days(now, holidays)
+    if period == "day":
+        return rate, business_days(now, holidays)
+    if period == "week":
+        start, end = period_bounds("week", now)
+        days = sum(
+            1
+            for n in range((end - start).days)
+            if (start + dt.timedelta(days=n)).date() not in holidays
+            and (start + dt.timedelta(days=n)).weekday() < 5
+        )
+        return rate * days, days
+    raise ValueError(f"pacing is not defined for period {period!r}")
 
 
 def principal_of(arn, human_patterns, exempt_patterns):
@@ -215,17 +233,26 @@ def handler(events, context):
     now = dt.datetime.now(dt.timezone.utc)
     cfg = {k: events[k] for k in events}
     dry_run = str(cfg.get("DryRun", "false")).lower() == "true"
-    period_start, period_end = period_bounds(cfg["Period"], now)
+    period = cfg["Period"]
+    period_start, period_end = period_bounds(period, now)
+    warn_only = cfg.get("Enforcement", "block") == "warn"
     block_minutes = int(cfg["BlockMinutes"])
     human = float(cfg["HumanLimitUsd"])
     pacing = ""
     if cfg.get("MonthlyBudgetUsd"):
+        budget = float(cfg["MonthlyBudgetUsd"])
         holidays = {dt.date.fromisoformat(d) for d in json.loads(cfg.get("HolidaysJson") or "[]")}
-        human = paced_limit(float(cfg["MonthlyBudgetUsd"]), now, holidays)
-        pacing = (
-            f"Human daily limit: {usd(human)}, {usd(float(cfg['MonthlyBudgetUsd']))} a month"
-            f" over {business_days(now, holidays)} business days"
-        )
+        human, period_days = paced_limit(budget, now, holidays, period)
+        if period == "week":
+            pacing = (
+                f"Human weekly limit: {usd(human)}, {usd(budget)} a month over"
+                f" {business_days(now, holidays)} business days, {period_days} in this week"
+            )
+        else:
+            pacing = (
+                f"Human daily limit: {usd(human)}, {usd(budget)} a month"
+                f" over {period_days} business days"
+            )
     workload = float(cfg["WorkloadLimitUsd"]) if cfg.get("WorkloadLimitUsd") else 2 * human
     defaults = {"human": human, "workload": workload}
     limits = json.loads(cfg["LimitsJson"])
@@ -247,15 +274,20 @@ def handler(events, context):
     blocks = {s["Sid"]: s for s in statements if s.get("Sid", "").startswith(SID_PREFIX)}
     notes = []
 
-    # Blocks that ended: drop them, and count that principal from the end of the block.
+    # Blocks that are gone: warn mode drops all of them (the limit no longer blocks);
+    # block mode drops the ones whose time is up. That principal's spend then counts
+    # again from the moment the block ended, so the usage that caused the block does
+    # not cause another.
     for sid, st in list(blocks.items()):
-        end = block_end(st)
-        if end <= now:
+        ended = block_end(st) <= now
+        if warn_only or ended:
             del blocks[sid]
             key = next((k for k, v in pstate.items() if v.get("sid") == sid), None)
             if key:
-                pstate[key].update({"since": end.isoformat(), "sid": None, "warned": []})
-            notes.append((key, f"unblocked {key or sid}, block ended {end:%Y-%m-%d %H:%M} UTC"))
+                back = period_start if warn_only else block_end(st)
+                pstate[key].update({"since": back.isoformat(), "sid": None, "warned": []})
+            why = "the limit no longer blocks" if warn_only else f"block ended {block_end(st):%Y-%m-%d %H:%M} UTC"
+            notes.append((key, f"unblocked {key or sid}, {why}"))
 
     # Spend this period, per principal, from the start of their window.
     rows = []
@@ -279,7 +311,8 @@ def handler(events, context):
                     who[key] = p
                     spend[key] = spend.get(key, 0.0) + price(row, prices)
 
-    # Warnings and new blocks.
+    # Warnings and, in block mode, new blocks. In warn mode a principal at its limit
+    # gets one notice per period and nothing else.
     for key, spent in sorted(spend.items()):
         p = who[key]
         limit = limit_for(p, limits, overrides, defaults, now)
@@ -288,12 +321,17 @@ def handler(events, context):
             if spent >= frac * limit and frac not in entry["warned"] and spent < limit:
                 entry["warned"].append(frac)
                 notes.append((key, warning(p, spent, limit)))
-        if spent >= limit and not entry.get("sid"):
-            until = now + dt.timedelta(minutes=block_minutes) if block_minutes else period_end
-            st = deny_statement(p, until)
-            blocks[st["Sid"]] = st
-            entry["sid"] = st["Sid"]
-            notes.append((key, f"blocked {key} until {until:%Y-%m-%d %H:%M} UTC: spent {usd(spent)}, limit {usd(limit)}"))
+        if spent >= limit and "limit" not in entry["warned"]:
+            entry["warned"].append("limit")
+            if warn_only:
+                owner = "their" if p["kind"] == "human" else "its"
+                notes.append((key, f"limit reached: {key} spent {usd(spent)}, {owner} {usd(limit)} limit (this limit warns and does not block)"))
+            elif not entry.get("sid"):
+                until = now + dt.timedelta(minutes=block_minutes) if block_minutes else period_end
+                st = deny_statement(p, until)
+                blocks[st["Sid"]] = st
+                entry["sid"] = st["Sid"]
+                notes.append((key, f"blocked {key} until {until:%Y-%m-%d %H:%M} UTC: spent {usd(spent)}, limit {usd(limit)}"))
 
     new_statements = list(blocks.values()) or [PLACEHOLDER]
     policy_changed = new_statements != statements
@@ -301,14 +339,17 @@ def handler(events, context):
         if policy_changed:
             _write_policy(iam, cfg["PolicyArn"], new_statements)
         _write_json_parameter(ssm, cfg["StateParameter"], state)
-        subject = f"Bedrock spend limit: {cfg['Name']}"[:100]
-        message = notice(notes, pacing, cfg["Period"], spend)
+        subject = f"Bedrock spend limit ({'warning' if warn_only else 'threshold notice'}): {cfg['Name']}"[:100]
+        out_notes = list(notes)
+        if warn_only:
+            out_notes.insert(0, (None, "This is a spend warning from the Bedrock spend limit. It warns and does not block access."))
+        message = notice(out_notes, pacing, cfg["Period"], spend)
         if message and cfg.get("TopicArn"):
             boto3.client("sns").publish(TopicArn=cfg["TopicArn"], Subject=subject, Message=message)
         email = json.loads(cfg.get("EmailJson") or "null")
         include = email and email.get("include")
         body = email and notice(
-            notes, pacing, cfg["Period"], spend, set(email.get("exclude") or []),
+            out_notes, pacing, cfg["Period"], spend, set(email.get("exclude") or []),
             None if include is None else set(include),
         )
         if body:
